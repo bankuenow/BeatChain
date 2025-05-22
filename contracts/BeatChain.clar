@@ -181,3 +181,80 @@
     )
   )
 )
+
+;; Trade Streaming Rights
+(define-public (trade-streaming-rights 
+  (track-id (string-ascii 100)) 
+  (new-fan principal)
+)
+  (begin
+    ;; Validate recipient
+    (asserts! (is-trading-partner-valid new-fan) ERR-INVALID-TRADING-PARTNER)
+    
+    ;; Verify ownership
+    (asserts! 
+      (is-eq tx-sender (unwrap! (nft-get-owner? streaming-rights-pass track-id) ERR-TRACK-NOT-AVAILABLE)) 
+      ERR-INVALID-RIGHTS-HOLDER
+    )
+    
+    ;; Update fan records
+    (map-delete streaming-fans {track-id: track-id, fan-address: tx-sender})
+    (map-set streaming-fans
+      {track-id: track-id, fan-address: new-fan} 
+      true
+    )
+    
+    ;; Transfer NFT streaming rights
+    (nft-transfer? streaming-rights-pass track-id tx-sender new-fan)
+  )
+)
+
+;; Remove Track from Platform
+(define-public (remove-track (track-id (string-ascii 100)))
+  (let ((track-data (unwrap! (get-track-metadata track-id) ERR-TRACK-NOT-AVAILABLE)))
+    (begin
+      ;; Owner-only operation
+      (asserts! (is-eq tx-sender platform-owner) ERR-UNAUTHORIZED-ACCESS)
+      
+      ;; Prevent duplicate removal
+      (asserts! (not (get track-removed track-data)) ERR-TRACK-ALREADY-REMOVED)
+      
+      ;; Mark track as removed
+      (map-set published-tracks
+        {track-id: track-id}
+        (merge track-data {track-removed: true})
+      )
+      
+      (ok true)
+    )
+  )
+)
+
+;; Claim Royalty Refund for Removed Track
+(define-public (claim-royalty-refund (track-id (string-ascii 100)))
+  (let (
+    (track-data (unwrap! (get-track-metadata track-id) ERR-TRACK-NOT-AVAILABLE))
+    (rights-holder (unwrap! (nft-get-owner? streaming-rights-pass track-id) ERR-TRACK-NOT-AVAILABLE))
+  )
+    (begin
+      ;; Verify track is removed
+      (asserts! (get track-removed track-data) ERR-TRACK-NOT_REMOVED)
+      
+      ;; Verify rights ownership
+      (asserts! (is-eq tx-sender rights-holder) ERR-INVALID-RIGHTS-HOLDER)
+      
+      ;; Invalidate streaming rights
+      (try! (nft-burn? streaming-rights-pass track-id tx-sender))
+      
+      ;; Process royalty refund
+      (try! (stx-transfer? (get streaming-cost track-data) platform-owner tx-sender))
+      
+      ;; Remove from fan registry
+      (map-delete streaming-fans
+        {track-id: track-id, fan-address: tx-sender}
+      )
+      
+      (ok true)
+    )
+  )
+)
